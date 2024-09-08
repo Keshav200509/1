@@ -1,0 +1,179 @@
+import os
+import requests
+import pandas as pd
+import subprocess
+
+# Constants
+GITHUB_API_URL = "https://api.github.com"
+USER_AGENT = "GitHub Reviewer Tool"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": USER_AGENT
+}
+
+# Static Analysis Tool Commands
+PYLINT_CMD = "pylint"
+
+# Scoring Parameters
+WEIGHTS = {
+    'code_length': 0.4,
+    'folder_depth': 0.2,
+    'num_files': 0.2,
+    'unique_technologies': 0.1,
+    'multi_language_support': 0.05,
+    'complex_frameworks': 0.05
+}
+
+def get_repositories(username):
+    """
+    Fetch all public repositories for a given GitHub username.
+    """
+    repositories = []
+    page = 1
+    while True:
+        url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+        response = requests.get(url, headers=DEFAULT_HEADERS)
+        
+        if response.status_code != 200:
+            raise Exception(f"Error fetching repositories: {response.json()}")
+        
+        repos = response.json()
+        if not repos:
+            break
+        
+        repositories.extend(repos)
+        page += 1
+
+    return repositories
+
+def clone_repository(repo_url, clone_dir):
+    """
+    Clone a repository to a local directory.
+    """
+    clone_cmd = f"git clone {repo_url} {clone_dir}"
+    subprocess.run(clone_cmd, shell=True, check=True)
+
+def analyze_code(directory):
+    """
+    Analyze code in the given directory and subdirectories.
+    """
+    loc = 0
+    num_files = 0
+    depth = 0
+    file_types = set()
+    
+    for root, dirs, files in os.walk(directory):
+        num_files += len(files)
+        current_depth = root.count(os.sep) - directory.count(os.sep)
+        depth = max(depth, current_depth)
+        
+        for file in files:
+            if file.endswith('.py'):
+                file_path = os.path.join(root, file)
+                with open(file_path, 'r') as f:
+                    loc += sum(1 for line in f if line.strip())
+            
+            file_ext = os.path.splitext(file)[1]
+            file_types.add(file_ext)
+    
+    return loc, num_files, depth, file_types
+
+def score_repository(loc, depth, num_files, file_types):
+    """
+    Score a repository based on complexity indicators.
+    """
+    score = 0
+    num_technologies = len(file_types)  # Number of unique file types as a proxy for technologies
+    multi_language_support = 1 if len(file_types) > 1 else 0
+    complex_frameworks = 1 if 'framework' in file_types else 0  # Simplified check
+
+    score += WEIGHTS['code_length'] * (loc / 1000)  # Normalize LOC
+    score += WEIGHTS['folder_depth'] * (depth / 10)  # Normalize depth
+    score += WEIGHTS['num_files'] * (num_files / 100)  # Normalize number of files
+    score += WEIGHTS['unique_technologies'] * (num_technologies / 10)  # Normalize technology count
+    score += WEIGHTS['multi_language_support'] * multi_language_support
+    score += WEIGHTS['complex_frameworks'] * complex_frameworks
+    
+    return score
+
+def generate_summary(repo_data):
+    """
+    Generate a summarized report of each repository.
+    """
+    summary = []
+    for repo in repo_data:
+        summary.append({
+            'Repository': repo['repository'],
+            'Complexity Score': repo['score'],
+            'Key Technologies Used': repo['file_types'],
+            'Unique Aspects': (
+                f"Multi-language Support: {repo['multi_language_support']} | "
+                f"Complex Frameworks: {repo['complex_frameworks']}"
+            )
+        })
+    
+    return summary
+
+def main(github_profile_link):
+    """
+    Main function to handle GitHub profile link and process repositories.
+    """
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    try:
+        print(f"Fetching repositories for user: {username}")
+        repositories = get_repositories(username)
+        print(f"Found {len(repositories)} repositories")
+
+        analysis_results = []
+        for repo in repositories:
+            repo_name = repo['name']
+            clone_url = repo['clone_url']
+            clone_dir = f"./{repo_name}"
+
+            print(f"Cloning repository: {repo_name}")
+            clone_repository(clone_url, clone_dir)
+
+            print(f"Analyzing repository: {repo_name}")
+            loc, num_files, depth, file_types = analyze_code(clone_dir)
+            score = score_repository(loc, depth, num_files, file_types)
+
+            analysis_results.append({
+                'repository': repo_name,
+                'lines_of_code': loc,
+                'number_of_files': num_files,
+                'folder_depth': depth,
+                'unique_technologies': len(file_types),
+                'multi_language_support': 'Yes' if len(file_types) > 1 else 'No',
+                'complex_frameworks': 'Yes' if 'framework' in file_types else 'No',
+                'file_types': str(file_types),
+                'score': score
+            })
+
+            # Clean up
+            subprocess.run(f"rm -rf {clone_dir}", shell=True, check=True)
+
+        # Generate Summary
+        summary = generate_summary(analysis_results)
+        summary_df = pd.DataFrame(summary)
+        summary_df.sort_values(by='Complexity Score', ascending=False, inplace=True)
+        print(summary_df)
+
+        # Highlight the most complex repository
+        most_complex_repo = summary_df.iloc[0]
+        print("\nMost Complex Repository Details:")
+        print(f"Repository: {most_complex_repo['Repository']}")
+        print(f"Complexity Score: {most_complex_repo['Complexity Score']}")
+        print(f"Key Technologies Used: {most_complex_repo['Key Technologies Used']}")
+        print(f"Unique Aspects Contributing to Complexity: {most_complex_repo['Unique Aspects']}")
+
+        # Optionally, save to CSV
+        summary_df.to_csv(f"{username}_repositories_summary.csv", index=False)
+        print(f"Summary saved to {username}_repositories_summary.csv")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    github_profile_link = input("Enter GitHub profile link: ")
+    main(github_profile_link)
