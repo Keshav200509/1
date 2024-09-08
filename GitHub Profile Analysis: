@@ -1,0 +1,81 @@
+pip install requests pandas
+import requests
+import pandas as pd
+
+# Constants
+GITHUB_API_URL = "https://api.github.com"
+USER_AGENT = "GitHub Reviewer Tool"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": USER_AGENT
+}
+
+def get_repositories(username):
+    """
+    Fetch all public repositories for a given GitHub username.
+    """
+    repositories = []
+    page = 1
+    while True:
+        url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+        response = requests.get(url, headers=DEFAULT_HEADERS)
+        
+        if response.status_code != 200:
+            raise Exception(f"Error fetching repositories: {response.json()}")
+        
+        repos = response.json()
+        if not repos:
+            break
+        
+        repositories.extend(repos)
+        page += 1
+
+    return repositories
+
+def filter_repositories(repositories):
+    """
+    Filter out repositories based on custom logic.
+    Here, we simply exclude repositories with no code files.
+    """
+    filtered_repos = []
+    for repo in repositories:
+        repo_name = repo['name']
+        # Add more filtering logic as needed
+        if 'size' in repo and repo['size'] > 10:  # Example: exclude very small repos
+            filtered_repos.append({
+                'name': repo_name,
+                'size': repo['size'],
+                'description': repo.get('description', 'No description')
+            })
+
+    return filtered_repos
+
+def main(github_profile_link):
+    """
+    Main function to handle GitHub profile link and process repositories.
+    """
+    # Extract username from the profile link
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    try:
+        print(f"Fetching repositories for user: {username}")
+        repositories = get_repositories(username)
+        print(f"Found {len(repositories)} repositories")
+
+        filtered_repos = filter_repositories(repositories)
+        print(f"Filtered down to {len(filtered_repos)} repositories")
+
+        # Display results in a DataFrame
+        df = pd.DataFrame(filtered_repos)
+        print(df)
+
+        # Optionally, save to CSV
+        df.to_csv(f"{username}_repositories.csv", index=False)
+        print(f"Results saved to {username}_repositories.csv")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    github_profile_link = input("Enter GitHub profile link: ")
+    main(github_profile_link)
