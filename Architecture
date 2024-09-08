@@ -1,0 +1,184 @@
+import asyncio
+from scraper import fetch_repositories
+from file_handler import clone_and_process_repo
+from utils import setup_logging
+
+setup_logging()
+
+async def process_repositories(username):
+    repositories = await fetch_repositories(username)
+    tasks = [clone_and_process_repo(repo) for repo in repositories]
+    results = await asyncio.gather(*tasks)
+    return results
+
+def main():
+    github_profile_link = input("Enter GitHub profile link: ")
+    username = github_profile_link.rstrip('/').split('/')[-1]
+    
+    try:
+        print(f"Processing repositories for user: {username}")
+        results = asyncio.run(process_repositories(username))
+        print("Processing complete. Results:", results)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
+import aiohttp
+import asyncio
+import logging
+
+GITHUB_API_URL = "https://api.github.com"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": "GitHub Reviewer Tool"
+}
+
+async def fetch_repositories(username):
+    async with aiohttp.ClientSession() as session:
+        repositories = []
+        page = 1
+        while True:
+            url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+            async with session.get(url, headers=DEFAULT_HEADERS) as response:
+                if response.status != 200:
+                    logging.error(f"Error fetching repositories: {await response.text()}")
+                    raise Exception("Failed to fetch repositories")
+                
+                repos = await response.json()
+                if not repos:
+                    break
+                
+                repositories.extend(repos)
+                page += 1
+
+        return repositories
+import os
+import subprocess
+import aiofiles
+import asyncio
+import logging
+from analyzer import analyze_code
+
+async def clone_repository(repo_url, clone_dir):
+    clone_cmd = f"git clone {repo_url} {clone_dir}"
+    try:
+        subprocess.run(clone_cmd, shell=True, check=True)
+        logging.info(f"Cloned repository: {repo_url}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to clone repository {repo_url}: {e}")
+        raise
+
+async def delete_repository(clone_dir):
+    try:
+        subprocess.run(f"rm -rf {clone_dir}", shell=True, check=True)
+        logging.info(f"Deleted repository directory: {clone_dir}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to delete repository directory {clone_dir}: {e}")
+        raise
+
+async def clone_and_process_repo(repo):
+    repo_name = repo['name']
+    clone_url = repo['clone_url']
+    clone_dir = f"./{repo_name}"
+
+    try:
+        await clone_repository(clone_url, clone_dir)
+        result = await analyze_code(clone_dir)
+    except Exception as e:
+        logging.error(f"Error processing repository {repo_name}: {e}")
+        result = {'repository': repo_name, 'error': str(e)}
+    finally:
+        await delete_repository(clone_dir)
+
+    return result
+import os
+import subprocess
+import logging
+
+WEIGHTS = {
+    'code_length': 0.4,
+    'folder_depth': 0.2,
+    'num_files': 0.2,
+    'unique_technologies': 0.1,
+    'multi_language_support': 0.05,
+    'complex_frameworks': 0.05
+}
+
+async def analyze_code(directory):
+    loc, num_files, depth, file_types = await get_code_metrics(directory)
+    pylint_score = await run_static_analysis(directory)
+    score = calculate_score(loc, depth, num_files, file_types)
+
+    return {
+        'repository': os.path.basename(directory),
+        'lines_of_code': loc,
+        'number_of_files': num_files,
+        'folder_depth': depth,
+        'unique_technologies': len(file_types),
+        'multi_language_support': 'Yes' if len(file_types) > 1 else 'No',
+        'complex_frameworks': 'Yes' if 'framework' in file_types else 'No',
+        'file_types': str(file_types),
+        'score': score,
+        'pylint_score': pylint_score
+    }
+
+async def get_code_metrics(directory):
+    loc = 0
+    num_files = 0
+    depth = 0
+    file_types = set()
+    
+    for root, dirs, files in os.walk(directory):
+        num_files += len(files)
+        current_depth = root.count(os.sep) - directory.count(os.sep)
+        depth = max(depth, current_depth)
+        
+        for file in files:
+            if file.endswith('.py'):
+                file_path = os.path.join(root, file)
+                async with aiofiles.open(file_path, 'r') as f:
+                    loc += sum(1 for line in await f.readlines() if line.strip())
+            
+            file_ext = os.path.splitext(file)[1]
+            file_types.add(file_ext)
+    
+    return loc, num_files, depth, file_types
+
+async def run_static_analysis(directory):
+    pylint_score = None
+    try:
+        result = subprocess.run(f"pylint {directory}", shell=True, capture_output=True, text=True)
+        pylint_score = result.stdout
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running pylint: {e}")
+        pylint_score = str(e)
+
+    return pylint_score
+
+def calculate_score(loc, depth, num_files, file_types):
+    score = 0
+    num_technologies = len(file_types)
+    multi_language_support = 1 if len(file_types) > 1 else 0
+    complex_frameworks = 1 if 'framework' in file_types else 0
+
+    score += WEIGHTS['code_length'] * (loc / 1000)
+    score += WEIGHTS['folder_depth'] * (depth / 10)
+    score += WEIGHTS['num_files'] * (num_files / 100)
+    score += WEIGHTS['unique_technologies'] * (num_technologies / 10)
+    score += WEIGHTS['multi_language_support'] * multi_language_support
+    score += WEIGHTS['complex_frameworks'] * complex_frameworks
+    
+    return score
+import logging
+import json
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def cache_data(username, data):
+    cache_file = f"{username}_cache.json"
+    with open(cache_file, 'w') as f:
+        json.dump(data, f, indent=4)
+    logging.info(f"Data cached in {cache_file}")
+
