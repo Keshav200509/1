@@ -1,0 +1,100 @@
+pip install requests pandas
+import requests
+import pandas as pd
+
+# Constants
+GITHUB_API_URL = "https://api.github.com"
+USER_AGENT = "GitHub Reviewer Tool"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": USER_AGENT
+}
+
+def get_repositories(username):
+    """
+    Fetch all public repositories for a given GitHub username.
+    """
+    repositories = []
+    page = 1
+    while True:
+        url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+        response = requests.get(url, headers=DEFAULT_HEADERS)
+        
+        if response.status_code != 200:
+            raise Exception(f"Error fetching repositories: {response.json()}")
+        
+        repos = response.json()
+        if not repos:
+            break
+        
+        repositories.extend(repos)
+        page += 1
+
+    return repositories
+
+def get_repo_details(username, repo_name):
+    """
+    Fetch detailed information about a specific repository.
+    """
+    repo_url = f"{GITHUB_API_URL}/repos/{username}/{repo_name}"
+    repo_response = requests.get(repo_url, headers=DEFAULT_HEADERS)
+    
+    if repo_response.status_code != 200:
+        raise Exception(f"Error fetching repository details: {repo_response.json()}")
+    
+    repo_data = repo_response.json()
+
+    # Get number of contributors
+    contributors_url = repo_data['contributors_url']
+    contributors_response = requests.get(contributors_url, headers=DEFAULT_HEADERS)
+    num_contributors = len(contributors_response.json())
+
+    # Get number of commits
+    commits_url = f"{repo_url}/commits"
+    commits_response = requests.get(commits_url, headers=DEFAULT_HEADERS)
+    num_commits = len(commits_response.json())
+
+    return {
+        'name': repo_data['name'],
+        'description': repo_data.get('description', 'No description'),
+        'stars': repo_data['stargazers_count'],
+        'forks': repo_data['forks_count'],
+        'watchers': repo_data['watchers_count'],
+        'primary_language': repo_data.get('language', 'Unknown'),
+        'size': repo_data['size'],
+        'num_contributors': num_contributors,
+        'num_commits': num_commits
+    }
+
+def main(github_profile_link):
+    """
+    Main function to handle GitHub profile link and process repositories.
+    """
+    # Extract username from the profile link
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    try:
+        print(f"Fetching repositories for user: {username}")
+        repositories = get_repositories(username)
+        print(f"Found {len(repositories)} repositories")
+
+        repo_details_list = []
+        for repo in repositories:
+            print(f"Fetching details for repository: {repo['name']}")
+            repo_details = get_repo_details(username, repo['name'])
+            repo_details_list.append(repo_details)
+
+        # Convert results to a DataFrame
+        df = pd.DataFrame(repo_details_list)
+        print(df)
+
+        # Optionally, save to CSV
+        df.to_csv(f"{username}_repositories_details.csv", index=False)
+        print(f"Results saved to {username}_repositories_details.csv")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    github_profile_link = input("Enter GitHub profile link: ")
+    main(github_profile_link)
