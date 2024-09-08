@@ -1,0 +1,27 @@
+import asyncio
+from scraper import fetch_repositories
+from file_handler import process_repositories_parallel
+from utils import setup_logging, load_cache, save_cache
+
+setup_logging()
+
+async def main():
+    github_profile_link = input("Enter GitHub profile link: ")
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    cache_file = f"{username}_cache.json"
+    cached_data = load_cache(cache_file)
+    
+    if cached_data:
+        print(f"Using cached data for user: {username}")
+        results = cached_data
+    else:
+        print(f"Fetching and processing repositories for user: {username}")
+        repositories = await fetch_repositories(username)
+        results = await process_repositories_parallel(repositories)
+        save_cache(cache_file, results)
+
+    print("Processing complete. Results:", results)
+
+if __name__ == "__main__":
+    asyncio.run(main())
