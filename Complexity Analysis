@@ -1,0 +1,139 @@
+pip install requests pandas pylint
+import os
+import glob
+import requests
+import pandas as pd
+import subprocess
+
+# Constants
+GITHUB_API_URL = "https://api.github.com"
+USER_AGENT = "GitHub Reviewer Tool"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": USER_AGENT
+}
+
+# Static Analysis Tool Commands
+PYLINT_CMD = "pylint"
+# You can add other commands for different languages here, e.g., eslint for JavaScript
+
+def get_repositories(username):
+    """
+    Fetch all public repositories for a given GitHub username.
+    """
+    repositories = []
+    page = 1
+    while True:
+        url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+        response = requests.get(url, headers=DEFAULT_HEADERS)
+        
+        if response.status_code != 200:
+            raise Exception(f"Error fetching repositories: {response.json()}")
+        
+        repos = response.json()
+        if not repos:
+            break
+        
+        repositories.extend(repos)
+        page += 1
+
+    return repositories
+
+def clone_repository(repo_url, clone_dir):
+    """
+    Clone a repository to a local directory.
+    """
+    clone_cmd = f"git clone {repo_url} {clone_dir}"
+    subprocess.run(clone_cmd, shell=True, check=True)
+
+def analyze_code(directory):
+    """
+    Analyze code in the given directory and subdirectories.
+    """
+    loc = 0
+    num_files = 0
+    depth = 0
+    file_types = {}
+    
+    for root, dirs, files in os.walk(directory):
+        num_files += len(files)
+        current_depth = root.count(os.sep) - directory.count(os.sep)
+        depth = max(depth, current_depth)
+        
+        for file in files:
+            if file.endswith('.py'):
+                file_path = os.path.join(root, file)
+                with open(file_path, 'r') as f:
+                    loc += sum(1 for line in f if line.strip())
+            
+            file_ext = os.path.splitext(file)[1]
+            if file_ext in file_types:
+                file_types[file_ext] += 1
+            else:
+                file_types[file_ext] = 1
+
+    return loc, num_files, depth, file_types
+
+def run_static_analysis(directory):
+    """
+    Run static analysis tools on the code in the directory.
+    """
+    pylint_score = None
+    try:
+        result = subprocess.run([PYLINT_CMD, directory], capture_output=True, text=True)
+        pylint_score = result.stdout
+    except Exception as e:
+        print(f"Error running pylint: {e}")
+
+    return pylint_score
+
+def main(github_profile_link):
+    """
+    Main function to handle GitHub profile link and process repositories.
+    """
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    try:
+        print(f"Fetching repositories for user: {username}")
+        repositories = get_repositories(username)
+        print(f"Found {len(repositories)} repositories")
+
+        analysis_results = []
+        for repo in repositories:
+            repo_name = repo['name']
+            clone_url = repo['clone_url']
+            clone_dir = f"./{repo_name}"
+
+            print(f"Cloning repository: {repo_name}")
+            clone_repository(clone_url, clone_dir)
+
+            print(f"Analyzing repository: {repo_name}")
+            loc, num_files, depth, file_types = analyze_code(clone_dir)
+            pylint_score = run_static_analysis(clone_dir)
+
+            analysis_results.append({
+                'repository': repo_name,
+                'lines_of_code': loc,
+                'number_of_files': num_files,
+                'folder_depth': depth,
+                'file_types': str(file_types),
+                'pylint_score': pylint_score
+            })
+
+            # Clean up
+            subprocess.run(f"rm -rf {clone_dir}", shell=True, check=True)
+
+        # Convert results to a DataFrame
+        df = pd.DataFrame(analysis_results)
+        print(df)
+
+        # Optionally, save to CSV
+        df.to_csv(f"{username}_repositories_analysis.csv", index=False)
+        print(f"Results saved to {username}_repositories_analysis.csv")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    github_profile_link = input("Enter GitHub profile link: ")
+    main(github_profile_link)
