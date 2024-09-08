@@ -1,0 +1,105 @@
+import requests
+import pandas as pd
+
+# Constants
+GITHUB_API_URL = "https://api.github.com"
+USER_AGENT = "GitHub Reviewer Tool"
+DEFAULT_HEADERS = {
+    "Accept": "application/vnd.github.v3+json",
+    "User-Agent": USER_AGENT
+}
+
+# File handling constants
+CODE_FILE_EXTENSIONS = ['.py', '.js', '.java', '.cpp', '.c']
+NON_CODE_FILE_EXTENSIONS = ['.json', '.ipynb', '.csv']
+MAX_FILE_SIZE_MB = 5  # Skip files larger than this threshold (in MB)
+
+def get_repositories(username):
+    """
+    Fetch all public repositories for a given GitHub username.
+    """
+    repositories = []
+    page = 1
+    while True:
+        url = f"{GITHUB_API_URL}/users/{username}/repos?per_page=100&page={page}"
+        response = requests.get(url, headers=DEFAULT_HEADERS)
+        
+        if response.status_code != 200:
+            raise Exception(f"Error fetching repositories: {response.json()}")
+        
+        repos = response.json()
+        if not repos:
+            break
+        
+        repositories.extend(repos)
+        page += 1
+
+    return repositories
+
+def get_repo_contents(username, repo_name):
+    """
+    Fetch the contents of a repository and prioritize code files.
+    """
+    contents_url = f"{GITHUB_API_URL}/repos/{username}/{repo_name}/contents"
+    response = requests.get(contents_url, headers=DEFAULT_HEADERS)
+    
+    if response.status_code != 200:
+        raise Exception(f"Error fetching repository contents: {response.json()}")
+    
+    contents = response.json()
+    files = []
+    for item in contents:
+        if item['type'] == 'file':
+            file_name = item['name']
+            file_size_mb = item.get('size', 0) / 1024 / 1024
+            file_ext = file_name.split('.')[-1]
+
+            # Skip files based on size and type
+            if file_size_mb > MAX_FILE_SIZE_MB or file_ext in NON_CODE_FILE_EXTENSIONS:
+                continue
+            
+            files.append({
+                'file_name': file_name,
+                'size_mb': file_size_mb,
+                'file_type': file_ext
+            })
+    
+    return files
+
+def main(github_profile_link):
+    """
+    Main function to handle GitHub profile link and process repositories.
+    """
+    username = github_profile_link.rstrip('/').split('/')[-1]
+
+    try:
+        print(f"Fetching repositories for user: {username}")
+        repositories = get_repositories(username)
+        print(f"Found {len(repositories)} repositories")
+
+        repo_files_list = []
+        for repo in repositories:
+            print(f"Fetching files for repository: {repo['name']}")
+            repo_files = get_repo_contents(username, repo['name'])
+            for file in repo_files:
+                repo_files_list.append({
+                    'repository': repo['name'],
+                    'file_name': file['file_name'],
+                    'size_mb': file['size_mb'],
+                    'file_type': file['file_type']
+                })
+
+        # Convert results to a DataFrame
+        df = pd.DataFrame(repo_files_list)
+        print(df)
+
+        # Optionally, save to CSV
+        df.to_csv(f"{username}_repository_files.csv", index=False)
+        print(f"Results saved to {username}_repository_files.csv")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    github_profile_link = input("Enter GitHub profile link: ")
+    main(github_profile_link)
